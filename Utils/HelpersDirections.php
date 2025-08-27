@@ -35,14 +35,18 @@ trait HelpersDirections
 
     public function formatResponse(array $response): array
     {
-        $distance = (int) $response['routes'][0]['distanceMeters'] ?? 0;
-        $duration = (int) $response['routes'][0]['duration'] ?? 0;
+        if (!isset($response['routes']) || empty($response['routes'])) {
+            throw new Exception('No routes found in response', 404);
+        }
+
+        $distance = (int) ($response['routes'][0]['distanceMeters'] ?? 0);
+        $duration = (int) ($response['routes'][0]['duration'] ?? 0);
 
         if ($distance == 0) {
             throw new Exception('Distance can not be zero', 404);
         }
 
-        $response = [
+        $formattedResponse = [
             'distance' => $distance,
             'distance_in_quilometers' => number_format(($distance / 1000), 2),
             'duration_in_seconds' => $duration,
@@ -50,7 +54,7 @@ trait HelpersDirections
             'waypoint_order' => $response['routes'][0]['optimizedIntermediateWaypointIndex'] ?? '',
         ];
 
-        return $response;
+        return $formattedResponse;
     }
 
     private function formatForTwoWaypoints(array $waypoints): array

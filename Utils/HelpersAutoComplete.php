@@ -37,7 +37,7 @@ trait HelpersAutoComplete
         return $data;
     }
 
-    public function formatResponse($response)
+    public function formatResponse($response): array
     {
         if (isset($response['error'])) {
             return [
@@ -46,7 +46,7 @@ trait HelpersAutoComplete
             ];
         }
 
-        $predictions = [];
+        $predictions = ['predictions' => []];
         if (isset($response['suggestions'])) {
             foreach ($response['suggestions'] as $item) {
                 if (isset($item['placePrediction']) && isset($item['placePrediction']['placeId']) && isset($item['placePrediction']['text']['text'])) {
@@ -60,6 +60,6 @@ trait HelpersAutoComplete
                 }
             }
         }
-        return $predictions ?? [];
+        return $predictions;
     }
 }
