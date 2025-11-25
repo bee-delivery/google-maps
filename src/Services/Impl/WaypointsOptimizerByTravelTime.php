@@ -82,21 +82,24 @@ class WaypointsOptimizerByTravelTime implements WaypointsOptimizer
             code: {$response['code']}, message: {$response['response']}");
         }
 
-        $route = $response['routes'][0] ?? null;
+        $route = $response['routes'][0] ?? [];
         $legs = $route['legs'] ?? [];
 
         if (empty($legs)) {
             throw new RoutesException('Failed to calculate totals: missing legs data from Routes API response.');
         }
 
-        array_pop($legs);
+        $legsWithoutReturn = array_slice($legs, 0, -1);
 
-        $distanceInMeters = 0;
-        $durationInSeconds = 0;
-        foreach ($legs as $item) {
-            $distanceInMeters += $item['distanceMeters'] ?? 0;
-            $durationInSeconds += $this->parseDurationInSeconds($item['duration'] ?? '0s');
-        }
+        $distanceInMeters = array_sum(array_map(
+            fn($leg) => $leg['distanceMeters'] ?? 0,
+            $legsWithoutReturn
+        ));
+        
+        $durationInSeconds = array_sum(array_map(
+            fn($leg) => $this->parseDurationInSeconds($leg['duration'] ?? '0s'),
+            $legsWithoutReturn
+        ));
 
         return new OptimizedWaypointsDTO(
             distanceInMeters: $distanceInMeters,
