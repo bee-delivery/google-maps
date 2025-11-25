@@ -7,6 +7,7 @@ class OptimizeWaypointsDTO
         public readonly WaypointDTO $origin,
         public readonly WaypointDTO $destination,
         /** @var array<WaypointDTO> */
-        public readonly array $intermediateWaypoints
+        public readonly array $intermediateWaypoints,
+        public readonly bool $hasReturn = false,
     ){}
 }

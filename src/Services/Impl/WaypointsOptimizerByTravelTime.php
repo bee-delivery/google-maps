@@ -16,25 +16,41 @@ class WaypointsOptimizerByTravelTime implements WaypointsOptimizer
     {
         $this->routes = new Routes();
     }
+    
     /**
      * Optimize the waypoints by travel time
      * @param OptimizeWaypointsDTO $optimizeWaypointsDTO
-     * @throws RoutesException when the response code is not 200
+     * @throws RoutesException when there is an error in the response
      * @return OptimizedWaypointsDTO
      */
     public function optimize(OptimizeWaypointsDTO $optimizeWaypointsDTO): OptimizedWaypointsDTO
+    {
+        if ($optimizeWaypointsDTO->hasReturn) {
+            return $this->optimizeWithReturn($optimizeWaypointsDTO);
+        }
+
+        return $this->optimizeWithoutReturn($optimizeWaypointsDTO);
+    }
+
+    /**
+     * Optimize the waypoints by travel time when there is a return to the origin
+     * @param OptimizeWaypointsDTO $optimizeWaypointsDTO
+     * @throws RoutesException when there is an error in the response
+     * @return OptimizedWaypointsDTO
+     */
+    private function optimizeWithReturn(OptimizeWaypointsDTO $optimizeWaypointsDTO): OptimizedWaypointsDTO
     {
         $response = $this->routes->routes(
             $optimizeWaypointsDTO->origin->toRoutesApiArray(),
             $optimizeWaypointsDTO->destination->toRoutesApiArray(),
             array_map(fn (WaypointDTO $waypoint) => $waypoint->toRoutesApiArray(), $optimizeWaypointsDTO->intermediateWaypoints),
         );
-        
+
         if (isset($response['code'])) {
             throw new RoutesException("Failed to optimize waypoints by travel time,
             code: {$response['code']}, message: {$response['response']}");
         }
-        
+
         return new OptimizedWaypointsDTO(
             distanceInMeters: $response['distance'],
             distanceInKilometers: $response['distance_in_quilometers'],
@@ -43,5 +59,64 @@ class WaypointsOptimizerByTravelTime implements WaypointsOptimizer
             optimizationType: WaypointsOptimizerType::MIN_TRAVEL_TIME,
             intermediateWaypointsOrder: $response['waypoint_order'],
         );
+    }
+
+    /**
+     * Optimize the waypoints by travel time when there is no return to the origin
+     * @param OptimizeWaypointsDTO $optimizeWaypointsDTO
+     * @throws RoutesException when there is an error in the response
+     * @return OptimizedWaypointsDTO
+     */
+    private function optimizeWithoutReturn(OptimizeWaypointsDTO $optimizeWaypointsDTO): OptimizedWaypointsDTO
+    {
+        $fieldMask = 'routes.optimized_intermediate_waypoint_index,routes.legs.distanceMeters,routes.legs.duration';
+        $response = $this->routes->routesPersonFieldMask(
+            $fieldMask,
+            $optimizeWaypointsDTO->origin->toRoutesApiArray(),
+            $optimizeWaypointsDTO->destination->toRoutesApiArray(),
+            array_map(fn (WaypointDTO $waypoint) => $waypoint->toRoutesApiArray(), $optimizeWaypointsDTO->intermediateWaypoints),
+        );
+
+        if (isset($response['code'])) {
+            throw new RoutesException("Failed to optimize waypoints by travel time,
+            code: {$response['code']}, message: {$response['response']}");
+        }
+
+        $route = $response['routes'][0] ?? [];
+        $legs = $route['legs'] ?? [];
+
+        if (empty($legs)) {
+            throw new RoutesException('Failed to calculate totals: missing legs data from Routes API response.');
+        }
+
+        $legsWithoutReturn = array_slice($legs, 0, -1);
+
+        $distanceInMeters = array_sum(array_map(
+            fn($leg) => $leg['distanceMeters'] ?? 0,
+            $legsWithoutReturn
+        ));
+        
+        $durationInSeconds = array_sum(array_map(
+            fn($leg) => $this->parseDurationInSeconds($leg['duration'] ?? '0s'),
+            $legsWithoutReturn
+        ));
+
+        return new OptimizedWaypointsDTO(
+            distanceInMeters: $distanceInMeters,
+            distanceInKilometers: round($distanceInMeters / 1000, 2),
+            durationInSeconds: $durationInSeconds,
+            durationInMinutes: round($durationInSeconds / 60, 2),
+            optimizationType: WaypointsOptimizerType::MIN_TRAVEL_TIME,
+            intermediateWaypointsOrder: $route['optimizedIntermediateWaypointIndex'] ?? [],
+        );
+    }
+
+    /**
+     * Parse Routes API duration strings (e.g. "12345s") into seconds.
+     */
+    private function parseDurationInSeconds(string $duration): int
+    {
+        $normalized = rtrim($duration, 's');
+        return (int) $normalized;
     }
 }
