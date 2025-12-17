@@ -64,6 +64,7 @@ trait HelpersGeoCoding
                 }
             }
         }
+        $addressStreet = empty($addressStreet) && empty($addressNumber) ? $result['formatted_address'] : $addressStreet;
         return [
             'address' => [
                 'street' => $addressStreet ?? '',
