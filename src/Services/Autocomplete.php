@@ -25,13 +25,13 @@ class Autocomplete
      * @param array $params
      * @return array
      */
-    public function query($searchText, $originLat = '', $originLng = '', $radius = 50000)
+    public function query($searchText, $originLat = '', $originLng = '', $radius = 50000, array $regionCodes = [])
     {
         try {
             return $this->formatResponse(
                 $this->http->post(
                     $this->url(),
-                    $this->formatRequest($searchText, $originLat, $originLng, $radius),
+                    $this->formatRequest($searchText, $originLat, $originLng, $radius, $regionCodes),
                     $this->formatFieldMask()
                 )
             );

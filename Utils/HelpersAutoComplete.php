@@ -16,7 +16,7 @@ trait HelpersAutoComplete
         return 'suggestions.placePrediction.text.text,suggestions.placePrediction.placeId,suggestions.placePrediction.structuredFormat.mainText.text,suggestions.placePrediction.structuredFormat.secondaryText.text,suggestions.placePrediction.types';
     }
 
-    public function formatRequest($searchText, $originLat, $originLng, $radius)
+    public function formatRequest($searchText, $originLat, $originLng, $radius, array $regionCodes = [])
     {
         $data['input'] = $searchText;
         $data['languageCode'] = 'pt';
@@ -32,6 +32,10 @@ trait HelpersAutoComplete
                     'radius' => $radius
                 ]
             ];
+        }
+
+        if (! empty($regionCodes)) {
+            $data['includedRegionCodes'] = array_values($regionCodes);
         }
 
         return $data;
