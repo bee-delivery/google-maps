@@ -15,9 +15,9 @@ class WaypointsOptimizerByRouteMatrixDistance implements WaypointsOptimizer
 {
     private RouteMatrix $routeMatrix;
     private RouteTravelModeEnum $mode;
-    public function __construct()
+    public function __construct(?RouteMatrix $routeMatrix = null)
     {
-        $this->routeMatrix = new RouteMatrix();
+        $this->routeMatrix = $routeMatrix ?? new RouteMatrix();
         $this->mode = RouteTravelModeEnum::DRIVE;
     }
 
@@ -36,7 +36,7 @@ class WaypointsOptimizerByRouteMatrixDistance implements WaypointsOptimizer
         $this->validateWaypointsCount($origins);
         
         $routeMatrix = $this->routeMatrix->getRouteMatrix($origins, $destinations, $this->mode);
-        $tspOptimizer = new RouteMatrixDistanceOptimizerByTSP($routeMatrix);
+        $tspOptimizer = new RouteMatrixDistanceOptimizerByTSP($routeMatrix, $optimizeWaypointsDTO->hasReturn);
         return $tspOptimizer->buildOptimizedWaypointsDTO();
     }
     
