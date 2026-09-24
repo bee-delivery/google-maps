@@ -3,6 +3,7 @@
 namespace Tests;
 
 use BeeDelivery\GoogleMaps\DTOs\RouteMatrixResponseDTO;
+use BeeDelivery\GoogleMaps\Exceptions\RouteMatrixException;
 use BeeDelivery\GoogleMaps\Utils\RouteMatrixDistanceOptimizerByTSP;
 use PHPUnit\Framework\TestCase as PHPUnitTestCase;
 
@@ -30,6 +31,49 @@ class RouteMatrixDistanceOptimizerByTSPTest extends PHPUnitTestCase
                     $distanceMeters,
                     (int) ($distanceMeters / 10),
                 );
+            }
+        }
+
+        return $matrix;
+    }
+
+    /**
+     * Mesma matriz, mas passando pelo parsing da resposta da API e marcando alguns
+     * pares como não roteáveis, do jeito que o route matrix devolve: sem
+     * distanceMeters e com condition ROUTE_NOT_FOUND.
+     *
+     * @param  array<int, int>  $positionsInMeters
+     * @param  array<int, array{0: int, 1: int}>  $unroutablePairs
+     * @return array<RouteMatrixResponseDTO>
+     */
+    private function matrixFromLineWithUnroutablePairs(array $positionsInMeters, array $unroutablePairs): array
+    {
+        $unroutable = [];
+        foreach ($unroutablePairs as [$originIndex, $destinationIndex]) {
+            $unroutable[$originIndex . ':' . $destinationIndex] = true;
+            $unroutable[$destinationIndex . ':' . $originIndex] = true;
+        }
+
+        $matrix = [];
+        foreach ($positionsInMeters as $originIndex => $originPosition) {
+            foreach ($positionsInMeters as $destinationIndex => $destinationPosition) {
+                if (isset($unroutable[$originIndex . ':' . $destinationIndex])) {
+                    $matrix[] = RouteMatrixResponseDTO::fromResponse([
+                        'originIndex' => $originIndex,
+                        'destinationIndex' => $destinationIndex,
+                        'condition' => 'ROUTE_NOT_FOUND',
+                    ]);
+                    continue;
+                }
+
+                $distanceMeters = abs($originPosition - $destinationPosition);
+                $matrix[] = RouteMatrixResponseDTO::fromResponse([
+                    'originIndex' => $originIndex,
+                    'destinationIndex' => $destinationIndex,
+                    'distanceMeters' => $distanceMeters,
+                    'duration' => ((int) ($distanceMeters / 10)) . 's',
+                    'condition' => 'ROUTE_EXISTS',
+                ]);
             }
         }
 
@@ -121,5 +165,41 @@ class RouteMatrixDistanceOptimizerByTSPTest extends PHPUnitTestCase
 
         $this->assertSame(3000, $optimized->distanceInMeters);
         $this->assertSame([1, 0], $optimized->intermediateWaypointsOrder);
+    }
+
+    public function testDoesNotTakeAPairTheApiCouldNotRouteAsAFreeLeg(): void
+    {
+        // A API não consegue rotear entre a parada de 1km e a de 3km. Esse elemento
+        // vem sem distanceMeters, e tratá-lo como zero faria dele a perna mais
+        // atraente da matriz: a rota sairia por 2km em vez dos 3km reais.
+        $matrix = $this->matrixFromLineWithUnroutablePairs([0, 1000, 2000, 3000, 0], [[1, 3]]);
+
+        $optimized = (new RouteMatrixDistanceOptimizerByTSP($matrix, hasReturn: false))
+            ->buildOptimizedWaypointsDTO();
+
+        $this->assertSame(3000, $optimized->distanceInMeters);
+        $this->assertSame([0, 1, 2], $optimized->intermediateWaypointsOrder);
+    }
+
+    public function testUsesAnotherRouteWhenTheOrderSubmittedCannotBeRouted(): void
+    {
+        // Não há rota da loja para a primeira parada lançada, então a ordem original
+        // não serve de referência e a alternativa calculável tem que vencer.
+        $matrix = $this->matrixFromLineWithUnroutablePairs([0, 5000, 1000, 2000, 0], [[0, 1]]);
+
+        $optimized = (new RouteMatrixDistanceOptimizerByTSP($matrix, hasReturn: false))
+            ->buildOptimizedWaypointsDTO();
+
+        $this->assertSame(5000, $optimized->distanceInMeters);
+        $this->assertSame([1, 2, 0], $optimized->intermediateWaypointsOrder);
+    }
+
+    public function testFailsWhenNoRouteAtAllCanBeCalculated(): void
+    {
+        $matrix = $this->matrixFromLineWithUnroutablePairs([0, 1000, 2000, 0], [[0, 1], [0, 2]]);
+
+        $this->expectException(RouteMatrixException::class);
+
+        (new RouteMatrixDistanceOptimizerByTSP($matrix, hasReturn: false))->buildOptimizedWaypointsDTO();
     }
 }

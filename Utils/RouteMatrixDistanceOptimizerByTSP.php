@@ -95,6 +95,12 @@ class RouteMatrixDistanceOptimizerByTSP
             return;
         }
 
+        if (! $routeMatrixRow->routeExists) {
+            // Um elemento que a API não conseguiu rotear chega sem distanceMeters,
+            // ou seja, como zero. Mantê-lo faria dele a perna mais barata da matriz.
+            return;
+        }
+
         $originIndex = $routeMatrixRow->originIndex;
         $this->map[$originIndex][] = $routeMatrixRow;
         $this->legs[$this->legKey($originIndex, $routeMatrixRow->destinationIndex)] = $routeMatrixRow;
@@ -152,8 +158,19 @@ class RouteMatrixDistanceOptimizerByTSP
      */
     public function getDestination(int $originIndex, int $destinationIndex): RouteMatrixResponseDTO
     {
-        return $this->legs[$this->legKey($originIndex, $destinationIndex)] ??
+        return $this->findDestination($originIndex, $destinationIndex) ??
             throw new RouteMatrixException('Destination not found for origin index: ' . $originIndex . ' and destination index: ' . $destinationIndex);
+    }
+
+    /**
+     * Get the leg between two waypoints, or null when the matrix has no route for it
+     * @param int $originIndex
+     * @param int $destinationIndex
+     * @return RouteMatrixResponseDTO|null
+     */
+    public function findDestination(int $originIndex, int $destinationIndex): ?RouteMatrixResponseDTO
+    {
+        return $this->legs[$this->legKey($originIndex, $destinationIndex)] ?? null;
     }
 
     /**
@@ -172,20 +189,31 @@ class RouteMatrixDistanceOptimizerByTSP
         }
 
         $originalPath = range(1, $this->destinationWaypointIndex - 1);
-        $candidatePath = $this->improveWithTwoOpt($this->buildGreedyPath());
+        $originalDistance = $this->pathDistanceInMeters($originalPath);
 
-        $this->optimalIntermediateWaypointsPath =
-            $this->pathDistanceInMeters($candidatePath) < $this->pathDistanceInMeters($originalPath)
-                ? $candidatePath
-                : $originalPath;
+        $greedyPath = $this->buildGreedyPath();
+        $candidatePath = $greedyPath === null ? null : $this->improveWithTwoOpt($greedyPath);
+        $candidateDistance = $candidatePath === null ? null : $this->pathDistanceInMeters($candidatePath);
+
+        if ($candidateDistance !== null && ($originalDistance === null || $candidateDistance < $originalDistance)) {
+            $this->optimalIntermediateWaypointsPath = $candidatePath;
+            return;
+        }
+
+        if ($originalDistance === null) {
+            throw new RouteMatrixException('No route could be calculated between the given waypoints');
+        }
+
+        $this->optimalIntermediateWaypointsPath = $originalPath;
     }
 
     /**
      * Build a route visiting, from each waypoint, the closest waypoint not visited yet
      * @throws RouteMatrixException when the maximum number of iterations is reached in case the algorithm gets stuck in a loop
-     * @return array<int> the intermediate waypoints as matrix indexes, in visiting order
+     * @return array<int>|null the intermediate waypoints as matrix indexes, in visiting
+     *                         order, or null when the matrix has no route to reach all of them
      */
-    private function buildGreedyPath(): array
+    private function buildGreedyPath(): ?array
     {
         $this->visitedIndexes = [];
         $path = [];
@@ -193,7 +221,10 @@ class RouteMatrixDistanceOptimizerByTSP
         $intermediateWaypointsCount = $this->destinationWaypointIndex - 1;
         $maxIterations = self::MAX_WAYPOINTS_COUNT_ALLOWED;
         while (count($path) < $intermediateWaypointsCount) {
-            $closestWaypoint = $this->getClosestWaypointTo($index);
+            $closestWaypoint = $this->findClosestWaypointTo($index);
+            if ($closestWaypoint === null) {
+                return null;
+            }
             $this->visitedIndexes[] = $index;
             $index = $closestWaypoint->destinationIndex;
             $path[] = $index;
@@ -208,12 +239,11 @@ class RouteMatrixDistanceOptimizerByTSP
     }
 
     /**
-     * Get the closest waypoint to the index
+     * Get the closest waypoint not visited yet, or null when there is none left
      * @param int $index
-     * @return RouteMatrixResponseDTO
-     * @throws RouteMatrixException when no closest waypoint is found
+     * @return RouteMatrixResponseDTO|null
      */
-    private function getClosestWaypointTo(int $index): RouteMatrixResponseDTO
+    private function findClosestWaypointTo(int $index): ?RouteMatrixResponseDTO
     {
         $destinations = $this->getDestinations($index);
         $destinations = array_filter($destinations, function (RouteMatrixResponseDTO $destination) {
@@ -222,8 +252,7 @@ class RouteMatrixDistanceOptimizerByTSP
             $doesNotPointToDestinationWaypoint = $destination->destinationIndex !== $this->destinationWaypointIndex;
             return $wasNotVisitedYet && $isNotDestinationWaypoint && $doesNotPointToDestinationWaypoint;
         });
-        return array_values($destinations)[0] ??
-            throw new RouteMatrixException('No closest waypoint found for index: ' . $index);
+        return array_values($destinations)[0] ?? null;
     }
 
     /**
@@ -238,7 +267,7 @@ class RouteMatrixDistanceOptimizerByTSP
     private function improveWithTwoOpt(array $path): array
     {
         $bestPath = $path;
-        $bestDistance = $this->pathDistanceInMeters($bestPath);
+        $bestDistance = $this->pathDistanceInMeters($bestPath) ?? PHP_INT_MAX;
         $waypointsCount = count($bestPath);
         $passes = 0;
         $improved = true;
@@ -251,7 +280,7 @@ class RouteMatrixDistanceOptimizerByTSP
                     $candidatePath = $bestPath;
                     $length = $end - $start + 1;
                     array_splice($candidatePath, $start, $length, array_reverse(array_slice($candidatePath, $start, $length)));
-                    $candidateDistance = $this->pathDistanceInMeters($candidatePath);
+                    $candidateDistance = $this->pathDistanceInMeters($candidatePath) ?? PHP_INT_MAX;
                     if ($candidateDistance < $bestDistance) {
                         $bestPath = $candidatePath;
                         $bestDistance = $candidateDistance;
@@ -267,14 +296,22 @@ class RouteMatrixDistanceOptimizerByTSP
     /**
      * Get the legs travelled by a route, from the origin up to its last waypoint
      * @param array<int> $path the intermediate waypoints as matrix indexes
-     * @return array<RouteMatrixResponseDTO>
+     * @return array<RouteMatrixResponseDTO>|null null when the matrix has no route for some leg
      */
-    private function pathLegs(array $path): array
+    private function pathLegs(array $path): ?array
     {
         $legs = $this->intermediateLegs($path);
 
+        if ($legs === null) {
+            return null;
+        }
+
         if ($this->hasReturn) {
-            $legs[] = $this->getDestination(end($path) ?: 0, $this->destinationWaypointIndex);
+            $closingLeg = $this->findDestination(end($path) ?: 0, $this->destinationWaypointIndex);
+            if ($closingLeg === null) {
+                return null;
+            }
+            $legs[] = $closingLeg;
         }
 
         return $legs;
@@ -283,14 +320,18 @@ class RouteMatrixDistanceOptimizerByTSP
     /**
      * Get the legs travelled between the origin and the intermediate waypoints
      * @param array<int> $path the intermediate waypoints as matrix indexes
-     * @return array<RouteMatrixResponseDTO>
+     * @return array<RouteMatrixResponseDTO>|null null when the matrix has no route for some leg
      */
-    private function intermediateLegs(array $path): array
+    private function intermediateLegs(array $path): ?array
     {
         $legs = [];
         $originIndex = 0;
         foreach ($path as $destinationIndex) {
-            $legs[] = $this->getDestination($originIndex, $destinationIndex);
+            $leg = $this->findDestination($originIndex, $destinationIndex);
+            if ($leg === null) {
+                return null;
+            }
+            $legs[] = $leg;
             $originIndex = $destinationIndex;
         }
 
@@ -300,12 +341,18 @@ class RouteMatrixDistanceOptimizerByTSP
     /**
      * Get the total distance of a route
      * @param array<int> $path the intermediate waypoints as matrix indexes
-     * @return int
+     * @return int|null null when the matrix has no route for some leg
      */
-    private function pathDistanceInMeters(array $path): int
+    private function pathDistanceInMeters(array $path): ?int
     {
+        $legs = $this->pathLegs($path);
+
+        if ($legs === null) {
+            return null;
+        }
+
         return array_reduce(
-            $this->pathLegs($path),
+            $legs,
             fn(int $total, RouteMatrixResponseDTO $leg) => $total + $leg->distanceMeters,
             0
         );
@@ -317,7 +364,8 @@ class RouteMatrixDistanceOptimizerByTSP
      */
     public function getOptimalIntermediateWaypointsOrderByDistance(): array
     {
-        return $this->intermediateLegs($this->getOptimalIntermediateWaypointsPath());
+        return $this->intermediateLegs($this->getOptimalIntermediateWaypointsPath()) ??
+            throw new RouteMatrixException('No route could be calculated between the given waypoints');
     }
 
     /**
@@ -341,7 +389,10 @@ class RouteMatrixDistanceOptimizerByTSP
         $distanceInMeters = 0;
         $durationInSeconds = 0;
 
-        foreach ($this->pathLegs($this->getOptimalIntermediateWaypointsPath()) as $leg) {
+        $legs = $this->pathLegs($this->getOptimalIntermediateWaypointsPath()) ??
+            throw new RouteMatrixException('No route could be calculated between the given waypoints');
+
+        foreach ($legs as $leg) {
             $distanceInMeters += $leg->distanceMeters;
             $durationInSeconds += $leg->durationInSeconds;
         }
